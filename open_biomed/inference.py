@@ -82,21 +82,43 @@ def test_mutation_explanation():
     pipeline = InferencePipeline(
         task="mutation_explanation",
         model="mutaplm",
-        model_ckpt="/AIRvePFS/dair/luoyz-data/projects/OpenBioMed/OpenBioMed_arch/checkpoints/demo/mutaplm.pth",
+        model_ckpt="/data_storage/niezk/ckpts/ExplanableESM/mutaplm.pth",
         output_prompt="Mutation effect: {output}",
         device="cuda:0"
     )
-    # protein = Protein.from_fasta("MQPWHGKAMQRASEAGATAPKASARNARGAPMDPTESPAAPEAALPKAGKFGPARKSGSRQKKSAPDTQERPPVRATGARAKKAPQRAQDTQPSDATSAPGAEGLEPPAAREPALSRAGSCRQRGARCSTKPRPPPGPWDVPSPGLPVSAPILVRRDAAPGASKLRAVLEKLKLSRDDISTAAGMVKGVVDHLLLRLKCDSAFRGVGLLNTGSYYEHVKISAPNEFDVMFKLEVPRIQLEEYSNTRAYYFVKFKRNPKENPLSQFLEGEILSASKMLSKFRKIIKEEINDIKDTDVIMKRKRGGSPAVTLLISEKISVDITLALESKSSWPASTQEGLRIQNWLSAKVRKQLRLKPFYLVPKHAKEGNGFQEETWRLSFSHIEKEILNNHGKSKTCCENKEEKCCRKDCLKLMKYLLEQLKERFKDKKHLDKFSSYHVKTAFFHVCTQNPQDSQWDRKDLGLCFDNCVTYFLQCLRTEKLENYFIPEFNLFSSNLIDKRSKEFLTKQIEYERNNEFPVFDEF")
-    # mutation = "D95A"
-    protein = Protein.from_fasta("MTLENVLEAARHLHQTLPALSEFGNWPTDLTATGLQPRAIPATPLVQALDQPGSPRTTGLVQAIRSAAHLAHWKRTYTEAEVGADFRNRYGYFELFGPTGHFHSTQLRGYVAYWGAGLDYDWHSHQAEELYLTLAGGAVFKVDGERAFVGAEGTRLHASWQSAAMSTGDQPILTFVLWRGEGLNALPRMDAA")
-    mutation = "H163A"
-    function = Text.from_str("Able to cleave dimethylsulfonioproprionate (DMSP) in vitro, releasing dimethyl sulfide (DMS). DMS is the principal form by which sulfur is transported from oceans to the atmosphere. The real activity of the protein is however subject to debate and it is unclear whether it constitutes a real dimethylsulfonioproprionate lyase in vivo: the very low activity with DMSP as substrate suggests that DMSP is not its native substrate.")
+    protein = Protein.from_fasta("MSHYRSNVRDQVFNLFEVLGVDKALGHGEFSDVDVDTARDMLAEVSRLAEGPVAESFVEGDRNPPVFDPKTHSVMLPESFKKSVNAMLEAGWDKVGIDEALGGMPMPKAVVWALHEHILGANPAVWMYAGGAGFAQILYHLGTEEQKKWAVLAAERGWGSTMVLTEPDAGSDVGAARTKAVQQADGSWHIDGVKRFITSGDSGDLFENIFHLVLARPEGAGPGTKGLSLYFVPKFLFDVETGEPGERNGVFVTNVEHKMGLKVSATCELAFGQHGVPAKGWLVGEVHNGIAQMFEVIEQARMMVGTKAIATLSTGYLNALQYAKSRVQGADLTQMTDKTAPRVTITHHPDVRRSLMTQKAYAEGLRALYLYTATFQDAAVAEVVHGVDAKLAVKVNDLMLPVVKGVGSEQAYAKLTESLQTLGGSGFLQDYPIEQYIRDAKIDSLYEGTTAIQAQDFFFRKIVRDKGVALAHVSGQIQEFVDSGAGNGRLKTERALLAKALTDVQGMAAALTGYLMAAQQDVTSLYKVGLGSVRFLMSVGDLIIGWLLQRQAAVAVAALDAGATGDERSFYEGKVAVASFFAKNFLPLLTSTREVIETLDNDIMELDEAAF")
+    mutation = "F294A"
+    label_effect = "Increases affinity for eicosanoyl-CoA; when associated with A-447. The mutation in FadE5 from Mycobacterium tuberculosis (MtbFadE5) has been reported to play a role in drug resistance."
+    label_function = "Acyl-CoA dehydrogenase that exhibits broad specificity for linear acyl-CoA substrates, with a preference for long-chain substrates."
     outputs = pipeline.run(
         wild_type=protein,
         mutation=mutation,
         #function=function,
     )
     print(outputs)
+    
+    # print("Start test!")
+    # df = pd.read_csv("/data/niezk/MutaPLM/data/test_easy.csv")
+    # df["uniprot_description"] = df["uniprot_description"].fillna('')
+    # df["GPT_description"] = df["GPT_description"].fillna('')
+    # output_file = "/data/niezk/OpenBioMed_new/output.tsv"
+    # if os.path.exists(output_file):
+    #     with open(output_file, 'w') as f:
+    #         f.write("Site\tLabel_Func\tLabel_Effect\tPred_Effect\tPred_Func\n")
+    # for i in tqdm(range(len(df))):
+    #     site = df["entry"][i]
+    #     protein = Protein.from_fasta(df["protein1"][i])
+    #     mutation = site.split('-')[1]
+    #     label_func = df["function"][i]
+    #     label_effect = (df["uniprot_description"][i]+' '+df["GPT_description"][i]).strip()
+    #     has_gpt_despt = False if df["GPT_description"][i]=='' else True
+    #     pred_effect, pred_func = pipeline.run(
+    #         wild_type=protein,
+    #         mutation=mutation,
+    #         has_gpt_despt=has_gpt_despt
+    #     )
+    #     with open(output_file, 'a+') as f:
+    #         f.write(site + "\t" + label_func + "\t" + label_effect + "\t" + pred_effect + "\t" + pred_func + "\n")
     return pipeline
 
 def test_mutation_engineering():

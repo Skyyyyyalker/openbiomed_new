@@ -153,3 +153,7 @@ cython_debug/
 *.txt
 !requirements.txt
 *.pth
+/get_score.py
+/output.tsv
+/score_easy.json
+/test.sh

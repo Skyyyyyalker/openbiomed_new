@@ -32,7 +32,13 @@ class MutaPLMExplanationFeaturizer(Featurizer):
         self.max_length_label = max_length_label
         self.stage2_prompt = stage2_prompt
 
-    def __call__(self, wild_type: Protein, mutation: str, label: Optional[Text]=None, function: Optional[Text]=None) -> Dict[str, Any]:
+    def __call__(self, 
+        wild_type: Protein, 
+        mutation: str, 
+        has_gpt_despt: bool=None,
+        label: Optional[Text]=None, 
+        function: Optional[Text]=None
+    ) -> Dict[str, Any]:
         pos = int(mutation[1:-1])
         wild_type = wild_type.sequence
         mutant = wild_type[:pos - 1] + mutation[-1] + wild_type[pos:]
@@ -49,8 +55,9 @@ class MutaPLMExplanationFeaturizer(Featurizer):
             truncation=True,
             add_special_tokens=True,
         )
+        length_prompt = "long detailed" if has_gpt_despt else "brief summary"
         featurized["stage2_prompt"] = self.text_tokenizer(
-            self.stage2_prompt.format(mutation[0], mutation[-1], mutation[1:-1]),
+            self.stage2_prompt.format(mutation[0], mutation[-1], mutation[1:-1], length_prompt),
             max_length=self.max_length_label,
             truncation=True,
             add_special_tokens=False,
@@ -139,8 +146,7 @@ class MutaPLM(MutationExplanationModel, MutationEngineeringModel):
         self.llm_tokenizer.add_special_tokens({'eos_token': '</s>'})
         self.llm_tokenizer.add_special_tokens({'unk_token': '<unk>'})
         logging.info(f"*** loading llm from {model_cfg.llama_ckpt}...")
-        llm_cfg = LlamaConfig.from_pretrained(model_cfg.llama_ckpt)
-        self.llm = LlamaForCausalLM(llm_cfg)
+        self.llm = LlamaForCausalLM.from_pretrained(model_cfg.llama_ckpt, torch_dtype=torch.bfloat16)
         self.llm.resize_token_embeddings(len(self.llm_tokenizer))
         
         # add lora
@@ -197,7 +203,7 @@ class MutaPLM(MutationExplanationModel, MutationEngineeringModel):
                 parent._add_task(self)
 
     def load_ckpt(self, state_dict: Dict[str, torch.Tensor]) -> None:
-        self.load_state_dict(state_dict["model"])
+        self.load_state_dict(state_dict["model"], strict=False)
 
     def featurizer_mutation_explanation(self) -> Tuple[Featurizer, Collator]:
         return MutaPLMExplanationFeaturizer(
@@ -347,23 +353,25 @@ class MutaPLM(MutationExplanationModel, MutationEngineeringModel):
         input_emb = self.llm.get_input_embeddings()
         bos_tokens = self.llm_tokenizer('<s>', return_tensors='pt', add_special_tokens=False).to(device).input_ids
         bos_embeds = input_emb(bos_tokens)  # [1, 1, 4096]
-        sys_prompt_tokens = self.llm_tokenizer(
-            self.config.system_prompt,
-            max_length=self.config.func_maxlen,
-            padding=False,
-            truncation=True,
-            return_tensors='pt', 
-            add_special_tokens=False,
-        ).to(device).input_ids
-        sys_embeds = input_emb(sys_prompt_tokens)
+        # sys_prompt_tokens = self.llm_tokenizer(
+        #     self.config.system_prompt,
+        #     max_length=self.config.func_maxlen,
+        #     padding=False,
+        #     truncation=True,
+        #     return_tensors='pt', 
+        #     add_special_tokens=False,
+        # ).to(device).input_ids
+        # sys_embeds = input_emb(sys_prompt_tokens)
         if predicted_function is None:    # CoT stage 1
-            sys_embeds = sys_embeds.expand(batch_size, -1, -1)
+            # sys_embeds = sys_embeds.expand(batch_size, -1, -1)
             bos_embeds = bos_embeds.expand(batch_size, -1, -1)
             bop_embeds = self.bop_embeds.expand(batch_size, -1, -1)
             eop_embeds = self.eop_embeds.expand(batch_size, -1, -1)
             bom_embeds = self.bom_embeds.expand(batch_size, -1, -1)
             eom_embeds = self.eom_embeds.expand(batch_size, -1, -1)
-            wrapped_embeds = torch.cat([bos_embeds, sys_embeds, bop_embeds, protein1_embeds, eop_embeds], dim=1)
+            # wrapped_embeds = torch.cat([bos_embeds, sys_embeds, bop_embeds, protein1_embeds, eop_embeds], dim=1)
+            # # without sys_prompt
+            wrapped_embeds = torch.cat([bos_embeds, bop_embeds, protein1_embeds, eop_embeds], dim=1)
             attention_mask = torch.ones((batch_size, wrapped_embeds.shape[1]), dtype=torch.long, device=device)
             return wrapped_embeds, attention_mask
         
@@ -397,7 +405,9 @@ class MutaPLM(MutationExplanationModel, MutationEngineeringModel):
                     mutation_tokens = stage2_prompt.input_ids[i]
                     muta_embeds = input_emb(mutation_tokens)
                     wrapped_embeds = torch.cat([
-                        bos_embeds, sys_embeds, bop_embeds, protein1_embeds[i].unsqueeze(0), eop_embeds, 
+                        bos_embeds, 
+                        # sys_embeds,
+                        bop_embeds, protein1_embeds[i].unsqueeze(0), eop_embeds, 
                         func_embeds.unsqueeze(0), muta_embeds.unsqueeze(0),
                         bom_embeds, protein2_embeds[i].unsqueeze(0), eom_embeds,
                     ], dim=1)
@@ -431,35 +441,46 @@ class MutaPLM(MutationExplanationModel, MutationEngineeringModel):
             if gt_function is None:
                 # stage 1
                 input_embeds, attn_mask = self._wrapped_sentence_inference(protein1_embeds, protein2_embeds)
-                outputs_function = self.llm.generate(
+                try:
+                    outputs_function = self.llm.generate(
+                        inputs_embeds=input_embeds,
+                        attention_mask=attn_mask,
+                        eos_token_id=self.llm_tokenizer.eos_token_id,
+                        pad_token_id=self.llm_tokenizer.pad_token_id,
+                        **self.config.text_generation.todict(),
+                    )
+                except Exception as e:
+                    print(e)
+                    return [["error"]]
+                outputs_function[outputs_function == 0] = 2 # convert output id 0 to 2 (eos_token_id)
+                output_function_text = self.llm_tokenizer.batch_decode(outputs_function, skip_special_tokens=True)
+                output_function_text = [text.strip() for text in output_function_text]
+                logging.info(f"Predicted function: {outputs_function_text}")
+            else:
+                output_function_text = gt_function
+            
+            # stage 2
+            outputs_function = [t+"</s>" for t in output_function_text]
+            outputs_function = self.llm_tokenizer(
+                outputs_function,
+                max_length=self.config.func_maxlen,
+                padding=False,
+                truncation=True,
+                return_tensors='pt', 
+                add_special_tokens=False,
+            ).to(device)
+            input_embeds, attn_mask = self._wrapped_sentence_inference(protein1_embeds, protein2_embeds, stage2_prompt, predicted_function=outputs_function.input_ids)
+            try:
+                outputs_effect = self.llm.generate(
                     inputs_embeds=input_embeds,
                     attention_mask=attn_mask,
                     eos_token_id=self.llm_tokenizer.eos_token_id,
                     pad_token_id=self.llm_tokenizer.pad_token_id,
                     **self.config.text_generation.todict(),
                 )
-                outputs_function[outputs_function == 0] = 2 # convert output id 0 to 2 (eos_token_id)
-                outputs_function = self.llm_tokenizer.batch_decode(outputs_function)
-                logging.info(f"Predicted function: {outputs_function}")
-                outputs_function = self.llm_tokenizer(
-                    outputs_function,
-                    max_length=self.config.func_maxlen,
-                    padding=False,
-                    truncation=True,
-                    return_tensors='pt', 
-                    add_special_tokens=False,
-                ).to(device)
-            else:
-                outputs_function = gt_function
-            # stage 2
-            input_embeds, attn_mask = self._wrapped_sentence_inference(protein1_embeds, protein2_embeds, stage2_prompt, predicted_function=outputs_function.input_ids)
-            outputs_effect = self.llm.generate(
-                inputs_embeds=input_embeds,
-                attention_mask=attn_mask,
-                eos_token_id=self.llm_tokenizer.eos_token_id,
-                pad_token_id=self.llm_tokenizer.pad_token_id,
-                **self.config.text_generation.todict(),
-            )
+            except Exception as e:
+                print(e)
+                return [["error"]]
             outputs_effect[outputs_effect == 0] = 2 # convert output id 0 to 2 (eos_token_id)
             output_effect_text = self.llm_tokenizer.batch_decode(outputs_effect, skip_special_tokens=True)
             output_effect_text = [text.strip() for text in output_effect_text]
